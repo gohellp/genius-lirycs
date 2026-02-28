@@ -26,9 +26,8 @@ image: "rust:latest"
 
 # Use cargo to test the project
 test:cargo:
-  script: echo "My name is $name"
-#    - rustc --version && cargo --version  # Print version info for debugging
-#    - cargo test --workspace --verbose
+    - rustc --version && cargo --version  # Print version info for debugging
+    - cargo test --workspace --verbose
 
 # Optional: Use a third party library to generate gitlab junit reports
 # test:junit-report:
