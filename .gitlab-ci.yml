@@ -11,6 +11,7 @@ test:spell:
 
   before_script:
     - npm install -g cspell
+    - npm install -g @cspell/dict-rust
 
   script:
     - cspell '**/*'
