@@ -6,7 +6,7 @@ stages:
   # - deploy
 
 test:spell:
-  stage: cpell-check
+  stage: spell-check
   image: node:latest
 
   before_script:
