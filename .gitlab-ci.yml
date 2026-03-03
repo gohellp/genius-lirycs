@@ -9,7 +9,7 @@ test:spell:
   stage: cpell-check
   image: node:latest
 
-  before-script:
+  before_script:
     - npm install -g cspell
 
   script:
@@ -20,7 +20,7 @@ test:coverage:
   stage: coverage-check
   image: rust:latest
 
-  before-script:
+  before_script:
     - rustc --version && cargo --version
     - rustup override set nightly-2025-08-06
     - rustup component add llvm-tools-preview
