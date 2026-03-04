@@ -52,6 +52,7 @@ test_cspell:
     - npm install -g cspell @cspell/dict-rust
 
   script:
+    - echo "test $GENIUS_TOKEN"
     - cspell '**/*'
   allow_failure: false 
 
