@@ -10,8 +10,7 @@ test:spell:
   image: node:latest
 
   before_script:
-    - npm install -g cspell
-    - npm install -g @cspell/dict-rust
+    - npm install -g cspell @cspell/dict-rust
 
   script:
     - cspell '**/*'
