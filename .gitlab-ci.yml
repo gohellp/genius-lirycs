@@ -1,13 +1,52 @@
-# image: "rust:latest"
-
+workflow:
+  rules:
+    - if: |
+        $CI_PIPELINE_SOURCE == "merge_request_event" &&
+        $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop"
+      variables:
+        PIPELINE_TYPE: "dev_pull_request"
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      variables:
+        PIPELINE_TYPE: "main_commit"
+    - when: never
+        
 stages:
-  - spell-check
-  - coverage-check
-  # - deploy
+  - spell_check
+  - coverage_check
+  - build
+  - publish
 
-test:spell:
-  stage: spell-check
+
+.base_rust:
+  image: rust:latest
+  before_script:
+    - rustc --version && cargo --version
+
+.base_cross:
+  image: rust:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: 1
+    DOCKER_CERT_PATH: "/certs/client"
+  before_script:
+    - PATH="$CI_PROJECT_DIR/.cargo/bin:$PATH" which cross || cargo install cross
+  
+  cache:
+    key: cross-binary
+    paths:
+      - $CARGO_HOME/registry
+      - $CARGO_HOME/git
+      - $CARGO_HOME/bin
+
+
+test_cspell:
+  stage: spell_check
   image: node:latest
+  rules:
+    - if: '$PIPELINE_TYPE == "dev_pull_request"'
 
   before_script:
     - npm install -g cspell @cspell/dict-rust
@@ -16,21 +55,23 @@ test:spell:
     - cspell '**/*'
   allow_failure: false 
 
-test:coverage:
-  stage: coverage-check
-  image: rust:latest
+test_coverage:
+  extends: .base_rust
+  stage: coverage_check
+  rules:
+    - if: '$PIPELINE_TYPE == "dev_pull_request"'
 
   before_script:
-    - rustc --version && cargo --version
-    - rustup override set nightly-2025-08-06
+    - !reference [.base_rust, before_script]
+    - rustup override set nightly-2025-08-06 
     - rustup component add llvm-tools-preview
     - which cargo-llvm-cov || cargo install cargo-llvm-cov
+    - apt-get update && apt-get install -y lcov
 
   script:
     - cargo llvm-cov --branch --lcov --output-path coverage.lcov
     - cargo llvm-cov report --branch --cobertura --output-path coverage.xml
     - cargo llvm-cov report --branch --html
-    - apt-get update && apt-get install -y lcov
     - lcov --summary coverage.lcov --ignore-errors inconsistent
   
   coverage: '/lines\.+: (\d+.\d+)%/'
@@ -46,7 +87,120 @@ test:coverage:
         coverage_format: cobertura
         path: coverage.xml
 
-# deploy:
-  # stage: deploy
-  # script: echo "Not defined yet"
-  # environment: production
+
+.build_script: &build_script |
+  LIB_NAME=$(cargo metadata --no-deps --format-version 1 \
+    | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; print(pkgs[0]['name'].replace('-','_'))")
+  echo "==> Library: ${LIB_NAME}  Target: ${TARGET}  OutDir: ${OUT_DIR}"
+  mkdir -p "${OUT_DIR}"
+
+  cross build --release --target "${TARGET}"
+
+  BASE="target/${TARGET}/release"
+
+  # .so / .dylib / .dll
+  for ext in so dylib dll; do
+    for f in "${BASE}/lib${LIB_NAME}.${ext}" "${BASE}/${LIB_NAME}.${ext}"; do
+      [ -f "$f" ] && cp "$f" "${OUT_DIR}/" && echo "copied $f"
+    done
+  done
+
+  # .a / .lib
+  for ext in a lib; do
+    for f in "${BASE}/lib${LIB_NAME}.${ext}" "${BASE}/${LIB_NAME}.${ext}"; do
+      [ -f "$f" ] && cp "$f" "${OUT_DIR}/" && echo "copied $f"
+    done
+  done
+
+
+build_linux_x86_64:
+  extends: .base_cross
+  stage: build
+  rules:
+    - if: '$PIPELINE_TYPE == "main_commit"'
+  
+  variables:
+    TARGET: x86_64-unknown-linux-gnu
+    OUT_DIR: dist/linux-x86_64
+
+  script:
+    - *build_script
+
+  artifacts:
+    name: "release-linux-x86_64-${CI_COMMIT_SHORT_SHA}"
+    expire_in: 90 days
+    paths:
+    - dist/linux-x86_64/
+
+build_linux_aarch64:
+  extends: .base_cross
+  stage: build
+  rules:
+    - if: '$PIPELINE_TYPE == "main_commit"'
+  
+  variables:
+    TARGET: aarch64-unknown-linux-gnu
+    OUT_DIR: dist/linux-aarch64
+  
+  script:
+    - *build_script
+  
+  artifacts:
+    name: "release-linux-aarch64-${CI_COMMIT_SHORT_SHA}"
+    expire_in: 90 days
+    paths:
+      - dist/linux-aarch64/
+
+build_windows_x86_64:
+  extends: .base_cross
+  stage: build
+  rules:
+    - if: '$PIPELINE_TYPE == "main_commit"'
+  
+  variables:
+    TARGET: x86_64-pc-windows-gnu
+    OUT_DIR: dist/windows-x86_64
+  
+  script:
+    - *build_script
+  
+  artifacts:
+    name: "release-windows-x86_64-${CI_COMMIT_SHORT_SHA}"
+    expire_in: 90 days
+    paths:
+      - dist/windows-x86_64/
+
+
+# --------------------------------------------------------
+# Commented due inabillity to access MacOS's Apple SDK to build dicker container for cross-rs/cross
+# --------------------------------------------------------
+# build:macos-x86_64:
+#   extends: .base_cross
+#   stage: build
+#   rules:
+#     - if: '$PIPELINE_TYPE == "release"'
+#
+#   variables:
+#     TARGET: x86_64-apple-darwin
+#     OUT_DIR: dist/macos-x86_64
+#
+#   script:
+#     - *build_script
+#
+#   artifacts:
+#     name: "release-macos-x86_64-${CI_COMMIT_SHORT_SHA}"
+#     expire_in: 90 days
+#     paths:
+#       - dist/macos-x86_64/
+
+publish:crates-io:
+  extends: .base_rust
+  stage: publish
+  rules:
+    - if: '$PIPELINE_TYPE == "main_commit"'
+  needs:
+    - build_linux_x86_64
+    - build_windows_x86_64
+  
+  script:
+    - cargo publish --token "${CARGO_REGISTRY_TOKEN}"
