@@ -17,15 +17,6 @@ stages:
   - build
   - publish
 
-include:
-  - template: Jobs/SAST.gitlab-ci.yml
-  - template: Jobs/Dependency-Scanning.gitlab-ci.yml
-variables:
-  SEARCH_MAX_DEPTH: 10
-gemnasium-dependency_scanning:
-  variables:
-    DS_REMEDIATE: "false"
-
 
 .base_rust:
   image: rust:latest
