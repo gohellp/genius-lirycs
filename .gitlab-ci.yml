@@ -12,8 +12,6 @@ workflow:
         $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /release\/.+/
       variables:
         PIPELINE_TYPE: "main_merge_request"
-    - if: |
-        true
     - when: never
         
 stages:
@@ -30,14 +28,6 @@ stages:
     - rustc --version && cargo --version
 
 .base_cross:
-  image: rust:latest
-  services:
-    - docker:dind
-  variables:
-    DOCKER_HOST: tcp://docker:2376
-    DOCKER_TLS_CERTDIR: "/certs"
-    DOCKER_TLS_VERIFY: 1
-    DOCKER_CERT_PATH: "/certs/client"
   before_script:
     - which cross || cargo install cross
   tags:
@@ -61,7 +51,6 @@ test_cspell:
     - npm install -g cspell @cspell/dict-rust
 
   script:
-    - echo "test $GENIUS_TOKEN"
     - cspell '**/*'
   allow_failure: false 
 
