@@ -1,47 +1,208 @@
-# You can copy and paste this template into a new `.gitlab-ci.yml` file.
-# You should not add this template to an existing `.gitlab-ci.yml` file by using the `include:` keyword.
-#
-# To contribute improvements to CI/CD templates, please follow the Development guide at:
-# https://docs.gitlab.com/development/cicd/templates/
-# This specific template is located at:
-# https://gitlab.com/gitlab-org/gitlab/-/blob/master/lib/gitlab/ci/templates/Rust.gitlab-ci.yml
 
-# Official language image. Look for the different tagged releases at:
-# https://hub.docker.com/r/library/rust/tags/
-image: "rust:latest"
+workflow:
+  rules:
+    - if: |
+        $CI_PIPELINE_SOURCE == "merge_request_event" &&
+        $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop"
+      variables:
+        PIPELINE_TYPE: "dev_pull_request"
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      variables:
+        PIPELINE_TYPE: "main_commit"
+    - when: never
+        
+stages:
+  - spell_check
+  - coverage_check
+  - build
+  - publish
 
-# Optional: Pick zero or more services to be used on all builds.
-# Only needed when using a docker container to run your tests in.
-# Check out: https://docs.gitlab.com/ee/ci/services/
-# services:
-#   - mysql:latest
-#   - redis:latest
-#   - postgres:latest
 
-# Optional: Install a C compiler, cmake and git into the container.
-# You will often need this when you (or any of your dependencies) depends on C code.
-# before_script:
-#   - apt-get update -yqq
-#   - apt-get install -yqq --no-install-recommends build-essential
+.base_rust:
+  image: rust:latest
+  before_script:
+    - rustc --version && cargo --version
 
-# Use cargo to test the project
-test:cargo:
+.base_cross:
+  image: rust:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: 1
+    DOCKER_CERT_PATH: "/certs/client"
+  before_script:
+    - PATH="$CI_PROJECT_DIR/.cargo/bin:$PATH" which cross || cargo install cross
+  
+  cache:
+    key: cross-binary
+    paths:
+      - $CARGO_HOME/registry
+      - $CARGO_HOME/git
+      - $CARGO_HOME/bin
+
+
+test_cspell:
+  stage: spell_check
+  image: node:latest
+  rules:
+    - if: '$PIPELINE_TYPE == "dev_pull_request"'
+
+  before_script:
+    - npm install -g cspell @cspell/dict-rust
+
   script:
-    - rustc --version && cargo --version  # Print version info for debugging
-    # - cargo test --workspace
+    - echo "test $GENIUS_TOKEN"
+    - cspell '**/*'
+  allow_failure: false 
 
-# Optional: Use a third party library to generate gitlab junit reports
-# test:junit-report:
+test_coverage:
+  extends: .base_rust
+  stage: coverage_check
+  rules:
+    - if: '$PIPELINE_TYPE == "dev_pull_request"'
+
+  before_script:
+    - !reference [.base_rust, before_script]
+    - rustup override set nightly-2025-08-06 
+    - rustup component add llvm-tools-preview
+    - which cargo-llvm-cov || cargo install cargo-llvm-cov
+    - apt-get update && apt-get install -y lcov
+
+  script:
+    - cargo llvm-cov --branch --lcov --output-path coverage.lcov
+    - cargo llvm-cov report --branch --cobertura --output-path coverage.xml
+    - cargo llvm-cov report --branch --html
+    - lcov --summary coverage.lcov --ignore-errors inconsistent
+  
+  coverage: '/lines\.+: (\d+.\d+)%/'
+
+  artifacts:
+    when: always
+    paths:
+      - coverage.xml
+      - coverage.lcov
+      - target/llvm-cov/html/
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+
+
+.build_script: &build_script |
+  LIB_NAME=$(cargo metadata --no-deps --format-version 1 \
+    | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; print(pkgs[0]['name'].replace('-','_'))")
+  echo "==> Library: ${LIB_NAME}  Target: ${TARGET}  OutDir: ${OUT_DIR}"
+  mkdir -p "${OUT_DIR}"
+
+  cross build --release --target "${TARGET}"
+
+  BASE="target/${TARGET}/release"
+
+  # .so / .dylib / .dll
+  for ext in so dylib dll; do
+    for f in "${BASE}/lib${LIB_NAME}.${ext}" "${BASE}/${LIB_NAME}.${ext}"; do
+      [ -f "$f" ] && cp "$f" "${OUT_DIR}/" && echo "copied $f"
+    done
+  done
+
+  # .a / .lib
+  for ext in a lib; do
+    for f in "${BASE}/lib${LIB_NAME}.${ext}" "${BASE}/${LIB_NAME}.${ext}"; do
+      [ -f "$f" ] && cp "$f" "${OUT_DIR}/" && echo "copied $f"
+    done
+  done
+
+
+build_linux_x86_64:
+  extends: .base_cross
+  stage: build
+  rules:
+    - if: '$PIPELINE_TYPE == "main_commit"'
+  
+  variables:
+    TARGET: x86_64-unknown-linux-gnu
+    OUT_DIR: dist/linux-x86_64
+
+  script:
+    - *build_script
+
+  artifacts:
+    name: "release-linux-x86_64-${CI_COMMIT_SHORT_SHA}"
+    expire_in: 90 days
+    paths:
+    - dist/linux-x86_64/
+
+build_linux_aarch64:
+  extends: .base_cross
+  stage: build
+  rules:
+    - if: '$PIPELINE_TYPE == "main_commit"'
+  
+  variables:
+    TARGET: aarch64-unknown-linux-gnu
+    OUT_DIR: dist/linux-aarch64
+  
+  script:
+    - *build_script
+  
+  artifacts:
+    name: "release-linux-aarch64-${CI_COMMIT_SHORT_SHA}"
+    expire_in: 90 days
+    paths:
+      - dist/linux-aarch64/
+
+build_windows_x86_64:
+  extends: .base_cross
+  stage: build
+  rules:
+    - if: '$PIPELINE_TYPE == "main_commit"'
+  
+  variables:
+    TARGET: x86_64-pc-windows-gnu
+    OUT_DIR: dist/windows-x86_64
+  
+  script:
+    - *build_script
+  
+  artifacts:
+    name: "release-windows-x86_64-${CI_COMMIT_SHORT_SHA}"
+    expire_in: 90 days
+    paths:
+      - dist/windows-x86_64/
+
+
+# --------------------------------------------------------
+# Commented due inabillity to access MacOS's Apple SDK to build dicker container for cross-rs/cross
+# --------------------------------------------------------
+# build:macos-x86_64:
+#   extends: .base_cross
+#   stage: build
+#   rules:
+#     - if: '$PIPELINE_TYPE == "release"'
+#
+#   variables:
+#     TARGET: x86_64-apple-darwin
+#     OUT_DIR: dist/macos-x86_64
+#
 #   script:
-#     Should be specified in Cargo.toml
-#     - cargo install junitify
-#     - cargo test -- --format=json -Z unstable-options --report-time | junitify --out $CI_PROJECT_DIR/tests/
+#     - *build_script
+#
 #   artifacts:
-#     when: always
-#     reports:
-#       junit: $CI_PROJECT_DIR/tests/*.xml
+#     name: "release-macos-x86_64-${CI_COMMIT_SHORT_SHA}"
+#     expire_in: 90 days
+#     paths:
+#       - dist/macos-x86_64/
 
-deploy:
-  stage: deploy
-  script: echo "Genius $GENIUS_TOKEN"
-  environment: production
+publish:crates-io:
+  extends: .base_rust
+  stage: publish
+  rules:
+    - if: '$PIPELINE_TYPE == "main_commit"'
+  needs:
+    - build_linux_x86_64
+    - build_windows_x86_64
+  
+  script:
+    - cargo publish --token "${CARGO_REGISTRY_TOKEN}"
