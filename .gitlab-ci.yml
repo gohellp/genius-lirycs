@@ -133,6 +133,8 @@ build_linux_x86_64:
     expire_in: 90 days
     paths:
     - dist/linux-x86_64/
+  tags:
+    - cross
 
 build_linux_aarch64:
   extends: .base_cross
@@ -152,6 +154,8 @@ build_linux_aarch64:
     expire_in: 90 days
     paths:
       - dist/linux-aarch64/
+  tags:
+    - cross
 
 build_windows_x86_64:
   extends: .base_cross
@@ -171,6 +175,8 @@ build_windows_x86_64:
     expire_in: 90 days
     paths:
       - dist/windows-x86_64/
+  tags:
+    - cross
 
 
 # --------------------------------------------------------
@@ -194,6 +200,8 @@ build_windows_x86_64:
 #     expire_in: 90 days
 #     paths:
 #       - dist/macos-x86_64/
+#   tags:
+#     - cross
 
 publish:crates-io:
   extends: .base_rust
