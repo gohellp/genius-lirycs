@@ -5,17 +5,23 @@ workflow:
         $CI_PIPELINE_SOURCE == "merge_request_event" &&
         $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop"
       variables:
-        PIPELINE_TYPE: "dev_pull_request"
-    - if: '$CI_COMMIT_BRANCH == "main"'
+        PIPELINE_TYPE: "dev_merge_request"
+    - if: |
+        $CI_PIPELINE_SOURCE == "merge_request_event"    &&
+        $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"  &&
+        $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /release\/.+/
       variables:
-        PIPELINE_TYPE: "main_commit"
+        PIPELINE_TYPE: "main_merge_request"
+    - if: |
+        true
     - when: never
         
 stages:
   - spell_check
   - coverage_check
   - build
-  - publish
+  # - prepare_release
+  # - publish
 
 
 .base_rust:
@@ -33,7 +39,9 @@ stages:
     DOCKER_TLS_VERIFY: 1
     DOCKER_CERT_PATH: "/certs/client"
   before_script:
-    - PATH="$CI_PROJECT_DIR/.cargo/bin:$PATH" which cross || cargo install cross
+    - which cross || cargo install cross
+  tags:
+    - cross
   
   cache:
     key: cross-binary
@@ -47,7 +55,7 @@ test_cspell:
   stage: spell_check
   image: node:latest
   rules:
-    - if: '$PIPELINE_TYPE == "dev_pull_request"'
+    - if: '$PIPELINE_TYPE == "dev_merge_request"'
 
   before_script:
     - npm install -g cspell @cspell/dict-rust
@@ -61,7 +69,7 @@ test_coverage:
   extends: .base_rust
   stage: coverage_check
   rules:
-    - if: '$PIPELINE_TYPE == "dev_pull_request"'
+    - if: '$PIPELINE_TYPE == "dev_merge_request"'
 
   before_script:
     - !reference [.base_rust, before_script]
@@ -119,7 +127,7 @@ build_linux_x86_64:
   extends: .base_cross
   stage: build
   rules:
-    - if: '$PIPELINE_TYPE == "main_commit"'
+    - if: '$PIPELINE_TYPE == "main_merge_request"'
   
   variables:
     TARGET: x86_64-unknown-linux-gnu
@@ -133,14 +141,12 @@ build_linux_x86_64:
     expire_in: 90 days
     paths:
     - dist/linux-x86_64/
-  tags:
-    - cross
 
 build_linux_aarch64:
   extends: .base_cross
   stage: build
   rules:
-    - if: '$PIPELINE_TYPE == "main_commit"'
+    - if: '$PIPELINE_TYPE == "main_merge_request"'
   
   variables:
     TARGET: aarch64-unknown-linux-gnu
@@ -154,14 +160,12 @@ build_linux_aarch64:
     expire_in: 90 days
     paths:
       - dist/linux-aarch64/
-  tags:
-    - cross
 
 build_windows_x86_64:
   extends: .base_cross
   stage: build
   rules:
-    - if: '$PIPELINE_TYPE == "main_commit"'
+    - if: '$PIPELINE_TYPE == "main_merge_request"'
   
   variables:
     TARGET: x86_64-pc-windows-gnu
@@ -175,8 +179,6 @@ build_windows_x86_64:
     expire_in: 90 days
     paths:
       - dist/windows-x86_64/
-  tags:
-    - cross
 
 
 # --------------------------------------------------------
@@ -200,17 +202,41 @@ build_windows_x86_64:
 #     expire_in: 90 days
 #     paths:
 #       - dist/macos-x86_64/
-#   tags:
-#     - cross
 
-publish:crates-io:
-  extends: .base_rust
-  stage: publish
-  rules:
-    - if: '$PIPELINE_TYPE == "main_commit"'
-  needs:
-    - build_linux_x86_64
-    - build_windows_x86_64
+# Run on MR from releases/* to main
+# prepare_release:
+#   stage: prepare_release
+#   rules:
+#     - if: '$PIPELINE_TYPE == "main_merge_request"'
+#   needs:
+#     - build_linux_x86_64
+#     - build_linux_aarch64
+#     - build_windows_x86_64
   
-  script:
-    - cargo publish --token "${CARGO_REGISTRY_TOKEN}"
+#   script:
+#     - |
+#       curl 
+#       --header "JOB-TOKEN: $CI_JOB_TOKEN"
+#       --upload-file ${PLACEHOLDER_file_name}
+#       "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/genius_lirycs/{PLACEHOLDER_tag}/${PLACEHOLDER_file_name}"
+  
+#   # TODO: generate tag and description by custom script
+#   # That script should read latest tag for a version and increase based on 
+#   # MR name. If it has "minor" then 0.0.x, if "breaking" then 0.x.0 if "major" then x.0.0
+#   # Also that script changes version in `Cargo.toml`
+#   release:
+#     tag_name: 
+#     description: 
+  
+
+# Mb I should run this job only on new release.
+# publish_crates-io:
+#   extends: .base_rust
+#   stage: publish
+#   rules:
+#     - if: '$PIPELINE_TYPE == "main_merge_request"'
+#   needs:
+#     # - prepare_release
+  
+#   script:
+#     - cargo publish --token "${CARGO_REGISTRY_TOKEN}"
