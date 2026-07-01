@@ -1,3 +1,5 @@
+№ THIS IS A MIRROR OF ORIGINAL REPOSITORY ON MY OWN GITLAB
+
 # genius-lyrics
 
 genius_lyrics is a library that can find information about a track and try to extract the lyrics from the genius website
